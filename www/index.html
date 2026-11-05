@@ -339,7 +339,7 @@ function itemSheet(it){
   sheet(`${head(it ? esc(it.name) : "Yeni hatırlatma","if")}
     <form id="if" class="card">
     ${isCustom ? `<div class="field"><label for="it">Başlık</label><input id="it" required maxlength="40" placeholder="Kış lastiği, takograf, ruhsat…" value="${esc(it?.title)}"></div>`:""}
-    <div class="field"><label for="id">${isMtv?"Taksit son günü":"Son geçerlilik tarihi"}</label><input id="id" type="date" value="${esc(it?.date)}" ${isCustom?"required":""}>
+    <div class="field"><label for="idate">${isMtv?"Taksit son günü":"Son geçerlilik tarihi"}</label><input id="idate" type="date" value="${esc(it?.date)}" ${isCustom?"required":""}>
       ${t?.hint?`<span class="hint">${t.hint}</span>`:""}</div>
     ${isMtv ? "" : `<div class="field"><label for="im">Yenileme aralığı</label><select id="im">
       ${[[0,"Tekrarlamıyor"],[6,"6 ay"],[12,"1 yıl"],[24,"2 yıl"],[36,"3 yıl"]].map(([m,l]) =>
@@ -394,7 +394,7 @@ document.addEventListener("click", async e => {
 
 document.addEventListener("submit", async e => {
   e.preventDefault();
-  const id = e.target.id;
+  const id = e.target.getAttribute("id");
   if (id==="vf"){
     const plate = document.getElementById("vp").value.trim().toLocaleUpperCase("tr-TR").replace(/\s+/g," ");
     const model = document.getElementById("vm").value.trim(), kind = document.getElementById("vk").value;
@@ -409,7 +409,7 @@ document.addEventListener("submit", async e => {
     const v = cur(); const iid = ui.id || "c_"+uid();
     const it = v.items[iid] || {type:"custom"};
     if (it.type==="custom") it.title = document.getElementById("it").value.trim();
-    it.date = document.getElementById("id").value;
+    it.date = document.getElementById("idate").value;
     const m = document.getElementById("im"); if (m) it.months = Number(m.value);
     it.note = document.getElementById("in").value.trim();
     v.items[iid] = it; closeSheet(); save("Kaydedildi");
