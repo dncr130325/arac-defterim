@@ -113,9 +113,25 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 <div id="layer"></div>
 <input type="file" id="importFile" accept="application/json,.json" hidden>
 
+<script src="vendor/capacitor.js"></script>
+<script>window.synapse = window.synapse || {exposeSynapse(){}};</script>
+<script src="vendor/app.js"></script>
+<script src="vendor/preferences.js"></script>
+<script src="vendor/local-notifications.js"></script>
+<script src="vendor/filesystem.js"></script>
+<script src="vendor/share.js"></script>
 <script>
-const P = (window.Capacitor && window.Capacitor.Plugins) || {};
-const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+const NATIVE = !!(window.capacitorExports && capacitorExports.Capacitor.isNativePlatform());
+const P = NATIVE ? {
+  App: window.capacitorApp?.App,
+  Preferences: window.capacitorPreferences?.Preferences,
+  LocalNotifications: window.capacitorLocalNotifications?.LocalNotifications,
+  Filesystem: window.capacitorFilesystemPluginCapacitor?.Filesystem,
+  Share: window.capacitorShare?.Share,
+} : {};
+const withTimeout = (pr, ms) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+window.addEventListener("error", e => toast("Hata: " + (e.message || "bilinmeyen")));
+window.addEventListener("unhandledrejection", e => toast("Hata: " + (e.reason?.message || e.reason || "bilinmeyen")));
 
 const TYPES = {
   muayene:{name:"Araç muayenesi", months:24, hint:"Otomobilde 2 yılda bir, ticari araçta yılda bir."},
@@ -170,14 +186,18 @@ function itemList(v){
 const KEY = "arac-defterim-v1";
 async function load(){
   let raw = null;
-  try { raw = P.Preferences ? (await P.Preferences.get({key:KEY})).value : localStorage.getItem(KEY); } catch {}
+  try { raw = P.Preferences ? (await withTimeout(P.Preferences.get({key:KEY}), 5000)).value : localStorage.getItem(KEY); } catch {}
+  if (!raw) { try { raw = localStorage.getItem(KEY); } catch {} }
   if (raw){ try { const s = JSON.parse(raw); state = {vehicles:s.vehicles||[], settings:{...DEFAULT_SETTINGS, ...(s.settings||{})}}; } catch {} }
 }
 async function save(msg){
   const raw = JSON.stringify(state);
-  try { if (P.Preferences) await P.Preferences.set({key:KEY, value:raw}); else localStorage.setItem(KEY, raw); }
-  catch { toast("Kaydedilemedi. Telefonda boş alan olduğundan emin ol."); return; }
-  render(); if (msg) toast(msg);
+  let ok = false;
+  try { localStorage.setItem(KEY, raw); ok = true; } catch {}
+  try { if (P.Preferences){ await withTimeout(P.Preferences.set({key:KEY, value:raw}), 5000); ok = true; } } catch {}
+  render();
+  if (!ok){ toast("Kaydedilemedi. Telefonda boş alan olduğundan emin ol."); return; }
+  if (msg) toast(msg);
   scheduleAll();
 }
 
@@ -185,8 +205,8 @@ async function save(msg){
 async function checkPerm(ask){
   const LN = P.LocalNotifications; if (!LN){ notifPerm = "none"; return notifPerm; }
   try {
-    let r = await LN.checkPermissions();
-    if (r.display !== "granted" && ask) r = await LN.requestPermissions();
+    let r = await withTimeout(LN.checkPermissions(), 4000);
+    if (r.display !== "granted" && ask) r = await withTimeout(LN.requestPermissions(), 60000);
     notifPerm = r.display;
   } catch { notifPerm = "none"; }
   return notifPerm;
@@ -377,9 +397,9 @@ document.addEventListener("submit", async e => {
     if (!plate) return;
     if (ui.id){ const v = cur(); const was = v.kind; Object.assign(v,{plate,model,kind});
       if (was!==kind && v.items.muayene) v.items.muayene.months = kind==="ticari"?12:24; }
-    else { const v = newVehicle({plate,model,kind}); state.vehicles.push(v); current = v.id;
-      if (NATIVE && state.settings.notify && notifPerm !== "granted") await checkPerm(true); }
-    closeSheet(); save("Kaydedildi");
+    else { const v = newVehicle({plate,model,kind}); state.vehicles.push(v); current = v.id; }
+    closeSheet(); await save("Kaydedildi");
+    if (NATIVE && state.settings.notify && notifPerm !== "granted"){ await checkPerm(true); render(); scheduleAll(); }
   }
   if (id==="if"){
     const v = cur(); const iid = ui.id || "c_"+uid();
@@ -393,8 +413,8 @@ document.addEventListener("submit", async e => {
   if (id==="sf"){
     const offs = [...document.querySelectorAll('input[name="off"]:checked')].map(x => Number(x.value));
     state.settings = {notify: document.getElementById("sn").checked, offsets: offs.length ? offs : [7], hour: Number(document.getElementById("sh").value)};
-    if (state.settings.notify && NATIVE) await checkPerm(true);
-    closeSheet(); save(state.settings.notify ? "Hatırlatmalar güncellendi" : "Bildirimler kapatıldı");
+    closeSheet(); await save(state.settings.notify ? "Hatırlatmalar güncellendi" : "Bildirimler kapatıldı");
+    if (state.settings.notify && NATIVE && notifPerm !== "granted"){ await checkPerm(true); render(); scheduleAll(); }
   }
 });
 
