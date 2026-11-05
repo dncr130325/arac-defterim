@@ -1,0 +1,15 @@
+{
+  "appId": "com.aracdefterim.app",
+  "appName": "Araç Defterim",
+  "webDir": "www",
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_car",
+      "iconColor": "#1D4FB8"
+    }
+  },
+  "android": {
+    "adjustMarginsForEdgeToEdge": "force"
+  },
+  "backgroundColor": "#eef1f4"
+}

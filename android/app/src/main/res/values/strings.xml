@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Araç Defterim</string>
+    <string name="title_activity_main">Araç Defterim</string>
+    <string name="package_name">com.aracdefterim.app</string>
+    <string name="custom_url_scheme">com.aracdefterim.app</string>
+</resources>

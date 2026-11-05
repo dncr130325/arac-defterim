@@ -1,0 +1,51 @@
+name: APK oluştur
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Bağımlılıkları kur
+        run: npm ci
+
+      - name: Web dosyalarını Android projesine kopyala
+        run: npx cap sync android
+
+      - name: APK derle
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: APK adını düzenle
+        run: cp android/app/build/outputs/apk/release/app-release.apk "AracDefterim-1.0.${{ github.run_number }}.apk"
+
+      - name: İndirme sayfasına koy
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Araç Defterim 1.0.${{ github.run_number }}
+          make_latest: true
+          body: |
+            Telefonuna yüklemek için aşağıdaki **AracDefterim-1.0.${{ github.run_number }}.apk** dosyasına dokun.
+            Daha önce kurduysan, yeni sürüm üzerine yüklenir ve kayıtların korunur.
+          files: AracDefterim-1.0.${{ github.run_number }}.apk
