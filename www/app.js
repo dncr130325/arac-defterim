@@ -29,6 +29,8 @@ const ICONS = {
   drop:'<path d="M12 2.7s-6 6.3-6 11a6 6 0 0 0 12 0c0-4.7-6-11-6-11z"/>',
   parking:'<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 17V7h4a3 3 0 0 1 0 6H9"/>',
   alert:'<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+  flame:'<path d="M12 22a7 7 0 0 0 7-7c0-4-3-6.5-4-10-2 2-3 4-3 6-1.2-1-2-2.6-2-4-2.5 2.5-5 5.2-5 8a7 7 0 0 0 7 7z"/>',
+  gauge:'<circle cx="12" cy="13" r="8"/><path d="M12 13l3.5-3.5M12 5V3M8 3h8"/>',
   dots:'<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
   camera:'<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/>',
   image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
@@ -77,8 +79,11 @@ const TYPES = {
   mtv:{name:"MTV", short:"MTV", months:0, icon:"receipt", exp:"mtv", hint:"Ocak ve Temmuz sonunda iki taksit."},
   egzoz:{name:"Egzoz emisyon ölçümü", short:"Egzoz", months:24, icon:"wind", exp:"muayene"},
   bakim:{name:"Periyodik bakım", short:"Bakım", months:12, icon:"wrench", exp:"bakim"},
+  takograf:{name:"Takograf muayenesi", short:"Takograf", months:24, icon:"gauge", exp:"muayene"},
+  yangin:{name:"Yangın tüpü dolumu", short:"Yangın tüpü", months:12, icon:"flame", exp:"diger"},
 };
-const ORDER = ["muayene","trafik","kasko","mtv","egzoz","bakim"];
+const ORDER = ["muayene","trafik","kasko","mtv","egzoz","bakim"];          // yeni araçta varsayılan açık
+const ALL_TYPES = [...ORDER, "takograf", "yangin"];
 const KINDS = {
   otomobil:{name:"Otomobil", muayene:24}, ticari:{name:"Kamyonet / panelvan", muayene:12}, kamyon:{name:"Kamyon", muayene:12},
   ismakinesi:{name:"İş makinesi", muayene:12}, traktor:{name:"Traktör", muayene:12}, motosiklet:{name:"Motosiklet", muayene:24},
@@ -96,7 +101,7 @@ const FUELS = ["","Benzin","Dizel","LPG","Benzin + LPG","Hibrit","Elektrik"];
 const AYLAR = ["Oca","Şub","Mar","Nis","May","Haz","Tem","Ağu","Eyl","Eki","Kas","Ara"];
 const AYLAR_UZUN = ["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz","Ağustos","Eylül","Ekim","Kasım","Aralık"];
 const DEFAULT_SETTINGS = {notify:true, offsets:[30,7,1,0], hour:10, theme:"auto", accent:"mavi"};
-const KEY = "arac-defterim-v1", AUTH_KEY = "arac-defterim-auth", LOCK_AFTER_MS = 5*60*1000;
+const KEY = "arac-defterim-v1", AUTH_KEY = "arac-defterim-auth", REM_KEY = "arac-defterim-remember", LOCK_AFTER_MS = 5*60*1000;
 
 /* ---------- yardımcılar ---------- */
 const pad = n => String(n).padStart(2,"0");
@@ -144,7 +149,7 @@ function haptic(kind){
 /* ---------- durum ---------- */
 let state = {vehicles:[], settings:{...DEFAULT_SETTINGS}};
 let auth = null;                       // {user, salt, hash}
-let session = {locked:true, mode:"login", hiddenAt:0, err:""};
+let session = {locked:true, mode:"login", hiddenAt:0, err:""}, remember = false;
 let current = null, tab = "takvim", animate = true, flashId = null, notifPerm = "unknown", ui = {};
 
 function normalize(v, i){
@@ -154,17 +159,18 @@ function normalize(v, i){
   Object.values(v.items).forEach(it => { it.history = it.history || []; });
   return v;
 }
-function newVehicle(f){
+const newItem = (k, kind) => ({type:k, date: k==="mtv" ? nextMtv() : "", note:"", history:[],
+  months: k==="muayene" ? KINDS[kind].muayene : TYPES[k].months});
+function newVehicle(f, types = ORDER){
   const items = {};
-  ORDER.forEach(k => items[k] = {type:k, date: k==="mtv" ? nextMtv() : "", note:"", history:[],
-    months: k==="muayene" ? KINDS[f.kind].muayene : TYPES[k].months});
+  types.forEach(k => items[k] = newItem(k, f.kind));
   return {id:uid(), plate:f.plate, model:f.model, year:f.year, kind:f.kind, color:f.color, photo:f.photo||null,
     items, card:{}, expenses:[], docs:[], created:Date.now()};
 }
 const itemName = it => it.type==="custom" ? it.title : (TYPES[it.type]?.name || it.title);
 const itemIcon = it => TYPES[it.type]?.icon || "bell";
 function itemList(v){
-  return Object.entries(v.items||{}).map(([id,it]) => ({id, ...it, name:itemName(it)}))
+  return Object.entries(v.items||{}).filter(([,it]) => !it.off).map(([id,it]) => ({id, ...it, name:itemName(it)}))
     .sort((a,b) => (a.date?daysLeft(a.date):1e9) - (b.date?daysLeft(b.date):1e9));
 }
 const cur = () => state.vehicles.find(x => x.id===current);
@@ -187,6 +193,7 @@ async function load(){
   if (raw){ try { const s = JSON.parse(raw); state = {vehicles:(s.vehicles||[]).map(normalize), settings:{...DEFAULT_SETTINGS, ...(s.settings||{})}}; } catch {} }
   const a = await kvGet(AUTH_KEY);
   if (a){ try { auth = JSON.parse(a); } catch {} }
+  remember = !!auth && (await kvGet(REM_KEY)) === "1";
 }
 async function save(msg, opts={}){
   const ok = await kvSet(KEY, JSON.stringify(state));
@@ -282,6 +289,7 @@ async function checkCredentials(user, pw){
   if (normUser(user) !== normUser(auth.user)) return false;
   return (await hashPw(pw, auth.salt)) === auth.hash;
 }
+async function setRemember(on){ remember = on; if (on) await kvSet(REM_KEY, "1"); else await kvDel(REM_KEY); }
 function lock(){ session = {...session, locked:true, mode: auth ? "login" : "create", err:""}; closeAll(); render(); }
 function unlock(){ session.locked = false; session.err = ""; animate = true; render(); scheduleAll(); }
 
@@ -300,6 +308,7 @@ function authView(){
       <div class="field"><label for="f-user">Kullanıcı adı</label><input id="f-user" autocomplete="username" autocapitalize="none" maxlength="30" required></div>
       ${pwField("f-pw","Şifre (en az 4 karakter)","new-password")}
       ${pwField("f-pw2","Şifre tekrar","new-password")}
+      <label class="check"><input type="checkbox" id="f-remember" checked> Beni hatırla (bu telefonda şifre sorma)</label>
       <div class="err" role="alert">${esc(session.err)}</div>
       <button class="btn primary block">Hesabı oluştur</button></form>
       ${state.vehicles.length ? `<p class="note">Mevcut araç kayıtların korunur.</p>` : ""}`;
@@ -310,6 +319,7 @@ function authView(){
   else form = `<form id="f-login" class="card" autocomplete="on">
       <div class="field"><label for="f-user">Kullanıcı adı</label><input id="f-user" autocomplete="username" autocapitalize="none" maxlength="30" required></div>
       ${pwField("f-pw","Şifre","current-password")}
+      <label class="check"><input type="checkbox" id="f-remember"> Beni hatırla</label>
       <div class="err" role="alert">${esc(session.err)}</div>
       <button class="btn primary block">${ic("lock")} Giriş yap</button></form>
       <button class="linkbtn" data-a="authMode" data-mode="reset">Şifremi unuttum</button>`;
@@ -473,7 +483,10 @@ function timeline(v){
 
 function calendarView(v){
   const items = itemList(v);
-  return timeline(v) + `<div class="sec-h"><h2>Yükümlülükler</h2><button class="btn sm" data-a="addCustom">${ic("plus")} Hatırlatma</button></div>
+  const head = `<div class="sec-h"><h2>Yükümlülükler</h2><div class="btns"><button class="btn sm" data-a="manage">${ic("sliders")} Düzenle</button><button class="btn sm" data-a="addCustom">${ic("plus")} Ekle</button></div></div>`;
+  if (!items.length) return head + `<div class="empty rise"><div class="ico s-none">${ic("calendar")}</div><h2>Takip edilen yükümlülük yok</h2>
+    <p>Muayene, sigorta, MTV gibi takip etmek istediklerini seç.</p><div class="row"><button class="btn primary" data-a="manage">${ic("sliders")} Yükümlülükleri seç</button></div></div>`;
+  return timeline(v) + head + `
   <div class="list">` + items.map((it, i) => { const t = tone(it);
     const last = it.history?.length ? it.history[it.history.length-1] : null;
     return `<div class="item rise ${flashId===it.id ? "flash" : ""}" style="--i:${i+2}">
@@ -595,6 +608,9 @@ function vehicleSheet(v){
       <span class="hint">Muayene aralığı türe göre ayarlanır; istersen satırdan değiştirebilirsin.</span></div>
     <div class="field"><span class="lab">Renk</span><div class="sw">${Object.entries(COLORS).map(([k,c]) =>
       `<label class="opt"><input type="radio" name="color" value="${k}" ${k===color ? "checked" : ""} aria-label="${k}"><span style="--c:${c}"></span></label>`).join("")}</div></div>
+    ${v ? "" : `<div class="field"><span class="lab">Takip edilecekler</span><div class="chips-in">${ALL_TYPES.map(k =>
+      `<label class="opt"><input type="checkbox" name="track" value="${k}" ${ORDER.includes(k) ? "checked" : ""}><span>${ic(TYPES[k].icon)}${TYPES[k].short}</span></label>`).join("")}</div>
+      <span class="hint">Kasko yaptırmıyorsan işaretini kaldır. Sonradan Takvim › Düzenle'den değiştirebilirsin.</span></div>`}
     ${photoPicker("Araç fotoğrafı (isteğe bağlı)", v?.photo)}
     <div id="vconf"></div>
     ${v ? `<button type="button" class="btn danger" data-a="askDelete">${ic("trash")} Aracı sil</button>` : ""}
@@ -613,11 +629,27 @@ function itemSheet(it){
       <span class="hint">“Yenilendi” dediğinde yeni tarih bu kadar ileri önerilir.</span></div>`}
     <div class="field"><label for="f-note">Not</label><input id="f-note" maxlength="60" placeholder="Acente, poliçe no, km…" value="${esc(it?.note)}"></div>
     <div id="iconf"></div>
-    ${it && isCustom ? `<button type="button" class="btn danger" data-a="askDeleteItem">${ic("trash")} Hatırlatmayı sil</button>` : ""}
+    ${it ? `<div class="btns"><button type="button" class="btn danger" data-a="askRemoveItem">${ic("trash")} Listeden kaldır</button></div>` : ""}
   </form>
   ${hist.length ? `<div class="card"><span class="lab">${ic("history",'style="width:14px;height:14px;vertical-align:-2px"')} Geçmiş</span><div class="hist">${hist.map(h => `<div class="hist-r"><i></i>
     <div style="min-width:0"><div class="t">${fmt(h.on)} tarihinde ${isMtv ? "ödendi" : "yenilendi"}</div><div class="s">${h.from ? fmt(h.from)+" → " : ""}${fmt(h.to)}${h.note ? " · "+esc(h.note) : ""}</div></div>
     <div class="amt">${h.amount ? money(h.amount) : ""}</div></div>`).join("")}</div></div>` : ""}`);
+}
+function manageSheet(v){
+  ui = {kind:"manage"};
+  const customs = Object.entries(v.items).filter(([,it]) => it.type === "custom");
+  const row = (key, icon, name, sub, on) => `<label class="mrow"><span class="ico s-none">${ic(icon)}</span>
+    <span style="min-width:0"><b>${esc(name)}</b><small>${sub}</small></span>
+    <input type="checkbox" class="switch" name="m" value="${key}" ${on ? "checked" : ""}></label>`;
+  const every = m => m ? (m % 12 ? `${m} ayda bir` : m === 12 ? "Her yıl" : `${m/12} yılda bir`) : "Tekrarlamıyor";
+  openSheet("Yükümlülükler", "mf", `<form id="mf" class="sheet-in">
+    <p class="help">Takip etmek istediklerini aç, istemediklerini kapat. Kapattıklarının geçmiş kayıtları silinmez.</p>
+    <div class="list">${ALL_TYPES.map(k => { const it = v.items[k];
+      const m = k === "mtv" ? 0 : (it?.months ?? (k==="muayene" ? KINDS[v.kind].muayene : TYPES[k].months));
+      return row(k, TYPES[k].icon, TYPES[k].name, k === "mtv" ? "Ocak ve Temmuz taksitleri" : every(m), it && !it.off); }).join("")}</div>
+    ${customs.length ? `<span class="lab">Kendi hatırlatmaların</span><div class="list">${customs.map(([id,it]) => row(id, "bell", it.title, it.date ? fmt(it.date) : "Tarih yok", !it.off)).join("")}</div>` : ""}
+    <button type="button" class="btn" data-a="manageCustom">${ic("plus")} Kendi hatırlatmanı ekle</button>
+  </form>`);
 }
 function renewSheet(v, id){
   const it = v.items[id], isMtv = it.type==="mtv";
@@ -689,8 +721,10 @@ function settingsSheet(){
         `<label class="opt"><input type="checkbox" name="off" value="${d}" ${s.offsets.includes(d) ? "checked" : ""}><span>${l}</span></label>`).join("")}</div></div>
       <div class="field"><label for="f-hour">Bildirim saati</label><select id="f-hour">${[8,9,10,12,14,18,20].map(h => `<option value="${h}"${s.hour===h ? " selected" : ""}>${pad(h)}:00</option>`).join("")}</select></div></div>
   </form>
-  <div class="card"><span class="lab">Hesap</span><p>Giriş yapan: <b>${esc(auth?.user)}</b>. Uygulama açılırken ve 5 dakikadan uzun arka planda kaldıktan sonra şifre sorulur.</p>
-    <div class="btns"><button class="btn" data-a="account">${ic("lock")} Kullanıcı adı ve şifre</button><button class="btn" data-a="lockNow">Kilitle</button></div></div>
+  <div class="card"><span class="lab">Hesap</span><p>Giriş yapan: <b>${esc(auth?.user)}</b>.</p>
+    <label class="check"><input type="checkbox" id="f-remember-s" form="sf" ${remember ? "checked" : ""}> Beni hatırla</label>
+    <p style="font-size:13px">Açıksa uygulama şifre sormadan açılır. Kapalıysa her açılışta ve 5 dakikadan uzun arka planda kaldıktan sonra şifre sorulur.</p>
+    <div class="btns"><button class="btn" data-a="account">${ic("lock")} Kullanıcı adı ve şifre</button><button class="btn" data-a="lockNow">Çıkış yap</button></div></div>
   <div class="card"><span class="lab">Yedek</span><p>Yedek dosyası araçları, masrafları ve belge fotoğraflarını içerir. WhatsApp, e-posta veya Drive'a kaydedebilirsin.</p>
     <div class="btns"><button class="btn" data-a="export">${ic("share")} Yedek al</button><button class="btn" data-a="import">Yedekten yükle</button></div></div>
   <p class="note">Araç Defterim ${window.APP_VERSION || ""}</p>`);
@@ -718,7 +752,7 @@ document.addEventListener("click", async e => {
     case "authMode": session.mode = b.dataset.mode; session.err = ""; render(); break;
     case "doReset": {
       for (const id of photoIds()) await Photos.del(id);
-      await kvDel(KEY); await kvDel(AUTH_KEY);
+      await kvDel(KEY); await kvDel(AUTH_KEY); await setRemember(false);
       state = {vehicles:[], settings:{...DEFAULT_SETTINGS}}; auth = null; session.mode = "create"; session.err = "";
       try { await P.LocalNotifications?.cancel({notifications:(await P.LocalNotifications.getPending()).notifications.map(n => ({id:n.id}))}); } catch {}
       render(); toast("Uygulama sıfırlandı"); break; }
@@ -729,7 +763,7 @@ document.addEventListener("click", async e => {
       closeAll(); break;
     case "settings": settingsSheet(); break;
     case "account": accountSheet(); break;
-    case "lockNow": lock(); break;
+    case "lockNow": await setRemember(false); lock(); toast("Çıkış yapıldı"); break;
     case "export": exportBackup(); break;
     case "import": document.getElementById("importFile").click(); break;
     case "askPerm": await checkPerm(true); render(); scheduleAll();
@@ -751,8 +785,10 @@ document.addEventListener("click", async e => {
     case "askDelete": $("#vconf").innerHTML = `<div class="confirm">${esc(v.plate)}; tarihleri, masrafları ve belgeleriyle silinsin mi?<button type="button" class="btn danger sm" data-a="doDelete">Evet, sil</button></div>`; haptic("warn"); break;
     case "doDelete": { const x = state.vehicles.find(y => y.id===ui.id); await Photos.del(x.photo); for (const d of x.docs) await Photos.del(d.photo);
       state.vehicles = state.vehicles.filter(y => y.id!==ui.id); closeAll(); animate = true; save("Araç silindi"); break; }
-    case "askDeleteItem": $("#iconf").innerHTML = `<div class="confirm">Bu hatırlatma silinsin mi?<button type="button" class="btn danger sm" data-a="doDeleteItem">Evet, sil</button></div>`; haptic("warn"); break;
-    case "doDeleteItem": delete v.items[ui.id]; closeAll(); save("Hatırlatma silindi"); break;
+    case "askRemoveItem": $("#iconf").innerHTML = `<div class="confirm"><span>${esc(itemName(v.items[ui.id]))} listeden kaldırılsın mı? Geçmiş kayıtları saklanır; istediğinde Düzenle'den geri ekleyebilirsin.</span><button type="button" class="btn danger sm" data-a="doRemoveItem">Evet, kaldır</button></div>`; haptic("warn"); break;
+    case "doRemoveItem": { const n = itemName(v.items[ui.id]); v.items[ui.id].off = true; closeAll(); animate = true; save(`${n} kaldırıldı`); break; }
+    case "manage": manageSheet(v); break;
+    case "manageCustom": closeAll(); itemSheet(null); break;
     case "askDeleteExpense": $("#econf").innerHTML = `<div class="confirm">Bu masraf silinsin mi?<button type="button" class="btn danger sm" data-a="doDeleteExpense">Evet, sil</button></div>`; haptic("warn"); break;
     case "doDeleteExpense": v.expenses = v.expenses.filter(x => x.id!==ui.id); closeAll(); save("Masraf silindi", {noSchedule:true}); break;
     case "askDeleteDoc": $("#vconf").innerHTML = `<span>Belge silinsin mi?</span><button class="btn danger" data-a="doDeleteDoc">Evet, sil</button><button class="btn" data-a="close">Vazgeç</button>`; haptic("warn"); break;
@@ -776,13 +812,14 @@ document.addEventListener("submit", async e => {
     session.err = !user ? "Kullanıcı adı gir." : pw.length < 4 ? "Şifre en az 4 karakter olmalı." : pw !== pw2 ? "Şifreler aynı değil." : "";
     if (session.err){ render(); document.getElementById("f-user").value = user; haptic("warn"); return; }
     if (!(await setCredentials(user, pw))){ session.err = "Hesap kaydedilemedi, tekrar dene."; render(); return; }
+    await setRemember(document.getElementById("f-remember").checked);
     unlock(); toast("Hesap oluşturuldu"); haptic("success");
     if (NATIVE && state.vehicles.length && state.settings.notify && notifPerm !== "granted"){ await checkPerm(true); render(); scheduleAll(); }
     return;
   }
   if (fid === "f-login"){
     const user = val("f-user"), pw = document.getElementById("f-pw").value;
-    if (await checkCredentials(user, pw)){ unlock(); haptic("success"); }
+    if (await checkCredentials(user, pw)){ await setRemember(document.getElementById("f-remember").checked); unlock(); haptic("success"); }
     else { session.err = "Kullanıcı adı veya şifre yanlış."; render(); document.getElementById("f-user").value = user; haptic("warn"); }
     return;
   }
@@ -792,7 +829,7 @@ document.addEventListener("submit", async e => {
     let x;
     if (ui.id){ x = cur(); const was = x.kind; Object.assign(x, f);
       if (was !== f.kind && x.items.muayene) x.items.muayene.months = KINDS[f.kind].muayene; }
-    else { x = newVehicle(f); state.vehicles.push(x); current = x.id; tab = "takvim"; }
+    else { x = newVehicle(f, [...document.querySelectorAll('input[name="track"]:checked')].map(i => i.value)); state.vehicles.push(x); current = x.id; tab = "takvim"; }
     if (ui.photoData){ const pid = uid(); try { await Photos.put(pid, ui.photoData); await Photos.del(x.photo); x.photo = pid; } catch { toast("Fotoğraf kaydedilemedi.", false); } }
     else if (ui.removePhoto && x.photo){ await Photos.del(x.photo); x.photo = null; }
     const isNew = !ui.id; closeAll(); animate = true; await save(isNew ? "Araç eklendi" : "Kaydedildi");
@@ -806,6 +843,18 @@ document.addEventListener("submit", async e => {
     const m = document.getElementById("f-months"); if (m) it.months = Number(m.value);
     it.note = val("f-note");
     v.items[iid] = it; flashId = iid; closeAll(); save("Kaydedildi"); return;
+  }
+  if (fid === "mf"){
+    const on = new Set([...document.querySelectorAll('input[name="m"]:checked')].map(i => i.value));
+    const changed = [];
+    ALL_TYPES.forEach(k => { const it = v.items[k];
+      if (on.has(k)){ if (!it){ v.items[k] = newItem(k, v.kind); changed.push(k); } else if (it.off){ it.off = false; changed.push(k); } }
+      else if (it && !it.off){ it.off = true; changed.push(k); } });
+    Object.entries(v.items).filter(([,it]) => it.type === "custom").forEach(([id,it]) => { const want = on.has(id); if (!!it.off === want){ it.off = !want; changed.push(id); } });
+    closeAll(); animate = true;
+    if (changed.length === 1){ const it = v.items[changed[0]]; save(`${itemName(it)} ${it.off ? "kaldırıldı" : "eklendi"}`); }
+    else save(changed.length ? "Yükümlülükler güncellendi" : "");
+    return;
   }
   if (fid === "rf"){
     const it = v.items[ui.id], to = val("f-rdate"); if (!to) return;
@@ -839,6 +888,7 @@ document.addEventListener("submit", async e => {
     const offs = [...document.querySelectorAll('input[name="off"]:checked')].map(x => Number(x.value));
     state.settings = {...state.settings, notify:document.getElementById("f-notify").checked, offsets:offs.length ? offs : [7], hour:Number(val("f-hour")),
       theme:document.querySelector('input[name="theme"]:checked').value, accent:document.querySelector('input[name="accent"]:checked').value};
+    await setRemember(document.getElementById("f-remember-s").checked);
     closeAll(); await save("Ayarlar kaydedildi");
     if (state.settings.notify && NATIVE && notifPerm !== "granted"){ await checkPerm(true); render(); scheduleAll(); }
     return;
@@ -864,7 +914,7 @@ if (P.App){
 }
 document.addEventListener("visibilitychange", () => {
   if (document.hidden){ session.hiddenAt = Date.now(); return; }
-  if (!session.locked && auth && session.hiddenAt && Date.now() - session.hiddenAt > LOCK_AFTER_MS) lock();
+  if (!session.locked && auth && !remember && session.hiddenAt && Date.now() - session.hiddenAt > LOCK_AFTER_MS) lock();
   else if (!session.locked && !$("#layer").innerHTML) render();
 });
 
@@ -872,6 +922,7 @@ document.addEventListener("visibilitychange", () => {
   try { const info = P.App && await withTimeout(P.App.getInfo(), 3000); if (info) window.APP_VERSION = info.version; } catch {}
   await load();
   session.mode = auth ? "login" : "create";
+  if (auth && remember) session.locked = false;
   await checkPerm(false);
   render();
 })();
