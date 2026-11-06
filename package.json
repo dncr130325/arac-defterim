@@ -10,9 +10,11 @@
     "@capacitor/app": "7.1.2",
     "@capacitor/core": "7.6.9",
     "@capacitor/filesystem": "7.1.9",
+    "@capacitor/haptics": "7.0.5",
     "@capacitor/local-notifications": "7.0.7",
     "@capacitor/preferences": "7.0.4",
     "@capacitor/share": "7.0.4",
+    "@capacitor/status-bar": "7.0.6",
     "@fontsource/figtree": "^5.2.8",
     "@fontsource/saira-condensed": "^5.2.6"
   },
