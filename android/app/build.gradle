@@ -25,10 +25,20 @@ android {
             keyAlias "aracdefterim"
             keyPassword "aracdefterim"
         }
+        // Google Play yükleme anahtarı: GitHub Secrets'tan gelir, depoda durmaz
+        upload {
+            def ks = System.getenv("UPLOAD_KEYSTORE_FILE")
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv("UPLOAD_KEYSTORE_PASSWORD")
+                keyAlias "upload"
+                keyPassword System.getenv("UPLOAD_KEYSTORE_PASSWORD")
+            }
+        }
     }
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            signingConfig System.getenv("UPLOAD_KEYSTORE_FILE") ? signingConfigs.upload : signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

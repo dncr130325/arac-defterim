@@ -36,8 +36,26 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
 
+      - name: Google Play paketi (AAB) derle
+        working-directory: android
+        env:
+          PLAY_UPLOAD_KEYSTORE: ${{ secrets.PLAY_UPLOAD_KEYSTORE }}
+          UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.PLAY_UPLOAD_PASSWORD }}
+        run: |
+          if [ -z "$PLAY_UPLOAD_KEYSTORE" ]; then
+            echo "::warning::PLAY_UPLOAD_KEYSTORE secret'i yok; Google Play paketi atlandı."
+            exit 0
+          fi
+          echo "$PLAY_UPLOAD_KEYSTORE" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          UPLOAD_KEYSTORE_FILE="$RUNNER_TEMP/upload.jks" ./gradlew bundleRelease --no-daemon
+          rm -f "$RUNNER_TEMP/upload.jks"
+
       - name: APK adını düzenle
-        run: cp android/app/build/outputs/apk/release/app-release.apk "AracDefterim-1.0.${{ github.run_number }}.apk"
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk "AracDefterim-1.0.${{ github.run_number }}.apk"
+          if [ -f android/app/build/outputs/bundle/release/app-release.aab ]; then
+            cp android/app/build/outputs/bundle/release/app-release.aab "AracDefterim-GooglePlay-1.0.${{ github.run_number }}.aab"
+          fi
 
       - name: İndirme sayfasına koy
         uses: softprops/action-gh-release@v2
@@ -48,4 +66,7 @@ jobs:
           body: |
             Telefonuna yüklemek için aşağıdaki **AracDefterim-1.0.${{ github.run_number }}.apk** dosyasına dokun.
             Daha önce kurduysan, yeni sürüm üzerine yüklenir ve kayıtların korunur.
-          files: AracDefterim-1.0.${{ github.run_number }}.apk
+            `.aab` dosyası yalnızca Google Play Console'a yüklemek içindir, telefona kurulmaz.
+          files: |
+            AracDefterim-1.0.${{ github.run_number }}.apk
+            AracDefterim-GooglePlay-1.0.${{ github.run_number }}.aab
