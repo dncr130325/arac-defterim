@@ -205,6 +205,16 @@ async function save(msg, opts={}){
 }
 
 /* ---------- fotoğraflar ---------- */
+const IDB = {
+  db:null,
+  open(){ if (this.db) return this.db; this.db = new Promise((res, rej) => { const r = indexedDB.open("arac-defterim", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("photos"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); return this.db; },
+  async tx(mode, fn){ const db = await this.open(); return new Promise((res, rej) => { const t = db.transaction("photos", mode); const st = t.objectStore("photos");
+    const r = fn(st); t.oncomplete = () => res(r?.result); t.onerror = () => rej(t.error); }); },
+  get(id){ return this.tx("readonly", st => st.get(id)); },
+  set(id, v){ return this.tx("readwrite", st => st.put(v, id)); },
+  del(id){ return this.tx("readwrite", st => st.delete(id)); },
+};
 const Photos = {
   src:{},
   path: id => `photos/${id}.jpg`,
@@ -212,28 +222,30 @@ const Photos = {
     if (P.Filesystem){
       await P.Filesystem.writeFile({path:this.path(id), data:dataUrl.split(",")[1], directory:"DATA", recursive:true});
       this.src[id] = dataUrl;
-    } else { try { localStorage.setItem("ph:"+id, dataUrl); } catch {} this.src[id] = dataUrl; }
+    } else { await IDB.set(id, dataUrl); this.src[id] = dataUrl; }
   },
   async url(id){
     if (this.src[id]) return this.src[id];
     try {
       if (P.Filesystem){ const r = await P.Filesystem.getUri({path:this.path(id), directory:"DATA"}); this.src[id] = CAP.convertFileSrc(r.uri); }
-      else this.src[id] = localStorage.getItem("ph:"+id) || "";
+      else this.src[id] = (await IDB.get(id)) || localStorage.getItem("ph:"+id) || "";
     } catch { this.src[id] = ""; }
     return this.src[id];
   },
   async read(id){
     try {
       if (P.Filesystem) return (await P.Filesystem.readFile({path:this.path(id), directory:"DATA"})).data;
-      const d = localStorage.getItem("ph:"+id); return d ? d.split(",")[1] : null;
+      const d = (await IDB.get(id)) || localStorage.getItem("ph:"+id); return d ? d.split(",")[1] : null;
     } catch { return null; }
   },
   async del(id){
     if (!id) return; delete this.src[id];
-    try { if (P.Filesystem) await P.Filesystem.deleteFile({path:this.path(id), directory:"DATA"}); else localStorage.removeItem("ph:"+id); } catch {}
+    try { if (P.Filesystem) await P.Filesystem.deleteFile({path:this.path(id), directory:"DATA"}); else { await IDB.del(id); localStorage.removeItem("ph:"+id); } } catch {}
   },
   async share(id, title){
-    if (!P.Filesystem || !P.Share){ toast("Paylaşım yalnızca telefonda çalışır.", false); return; }
+    const name0 = (title||"belge").replace(/[^\wçğıöşüÇĞİÖŞÜ -]/g,"").trim().replace(/\s+/g,"-") + ".jpg";
+    if (!P.Filesystem || !P.Share){ const u = await this.url(id); const blob = await (await fetch(u)).blob();
+      return shareOrDownload(new File([blob], name0, {type:"image/jpeg"}), title); }
     const name = (title||"belge").replace(/[^\wçğıöşüÇĞİÖŞÜ -]/g,"").trim().replace(/\s+/g,"-") + ".jpg";
     await P.Filesystem.copy({from:this.path(id), directory:"DATA", to:name, toDirectory:"CACHE"});
     const r = await P.Filesystem.getUri({path:name, directory:"CACHE"});
@@ -369,6 +381,53 @@ async function scheduleAll(){
   } catch(e){ console.warn("bildirim", e); }
 }
 
+/* ---------- web: paylaş veya indir ---------- */
+async function shareOrDownload(file, title){
+  if (navigator.canShare && navigator.canShare({files:[file]})){
+    try { await navigator.share({files:[file], title}); return; } catch(e){ if (e?.name === "AbortError") return; }
+  }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+/* ---------- takvime aktar (.ics) ---------- */
+function buildICS(){
+  const ymd = s => s.replace(/-/g,""), stamp = new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d+/,"");
+  const fold = t => t.replace(/([,;\\])/g,"\\$1").replace(/\n/g,"\\n");
+  const offs = [...state.settings.offsets].sort((a,b) => b-a), h = state.settings.hour;
+  const alarms = (offs.length > 1 ? [offs[0], offs[offs.length-1]] : offs);   // iPhone Takvim en fazla 2 uyarı gösterir
+  const L = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Arac Defterim//TR","CALSCALE:GREGORIAN","METHOD:PUBLISH","X-WR-CALNAME:Araç Defterim"];
+  let n = 0;
+  for (const v of state.vehicles) for (const it of itemList(v)){
+    if (!it.date || daysLeft(it.date) < 0) continue;
+    const next = new Date(parse(it.date).getTime() + 86400000);
+    L.push("BEGIN:VEVENT", `UID:${v.id}-${it.id}-${ymd(it.date)}@arac-defterim`, `DTSTAMP:${stamp}`,
+      `DTSTART;VALUE=DATE:${ymd(it.date)}`, `DTEND;VALUE=DATE:${ymd(iso(next))}`,
+      `SUMMARY:${fold(`${v.plate} · ${it.name} son gün`)}`, `DESCRIPTION:${fold(`Araç Defterim hatırlatması.${it.note ? " Not: "+it.note : ""}`)}`, "TRANSP:TRANSPARENT");
+    for (const d of alarms){ const hrs = d*24 - h;
+      L.push("BEGIN:VALARM","ACTION:DISPLAY",`DESCRIPTION:${fold(`${v.plate} · ${it.name}: ${d ? d+" gün kaldı" : "bugün son gün"}`)}`,
+        `TRIGGER:${hrs > 0 ? "-PT"+hrs+"H" : "PT"+(-hrs)+"H"}`,"END:VALARM"); }
+    L.push("END:VEVENT"); n++;
+  }
+  L.push("END:VCALENDAR");
+  return {text: L.join("\r\n"), count: n};
+}
+async function exportCalendar(){
+  const {text, count} = buildICS();
+  if (!count){ toast("Takvime aktarılacak ileri tarihli kayıt yok.", false); return; }
+  const file = new File([text], "arac-defterim-takvim.ics", {type:"text/calendar"});
+  try {
+    if (P.Filesystem && P.Share){
+      await P.Filesystem.writeFile({path:file.name, data:text, directory:"CACHE", encoding:"utf8"});
+      const r = await P.Filesystem.getUri({path:file.name, directory:"CACHE"});
+      await P.Share.share({title:"Araç Defterim takvimi", files:[r.uri], dialogTitle:"Takvime ekle"});
+    } else if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+      // iPhone: .ics dosyasını doğrudan açınca Takvim "Tümünü Ekle" ekranı çıkar
+      location.href = "data:text/calendar;charset=utf-8," + encodeURIComponent(text);
+    } else await shareOrDownload(file, "Araç Defterim takvimi");
+  } catch(e){ if (!/cancel|abort/i.test(String(e?.message||e))) toast("Takvim dosyası oluşturulamadı.", false); }
+}
+
 /* ---------- yedek ---------- */
 function photoIds(){
   const ids = [];
@@ -386,9 +445,7 @@ async function exportBackup(){
       await P.Filesystem.writeFile({path:name, data, directory:"CACHE", encoding:"utf8"});
       const r = await P.Filesystem.getUri({path:name, directory:"CACHE"});
       await P.Share.share({title:"Araç Defterim yedeği", files:[r.uri], dialogTitle:"Yedeği kaydet veya gönder"});
-    } else {
-      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([data],{type:"application/json"})); a.download = name; a.click();
-    }
+    } else await shareOrDownload(new File([data], name, {type:"application/json"}), "Araç Defterim yedeği");
   } catch(e){ if (!/cancel/i.test(String(e?.message||e))) toast("Yedek oluşturulamadı.", false); }
 }
 document.getElementById("importFile").addEventListener("change", async e => {
@@ -413,6 +470,8 @@ function render(){
   let h = `<header class="top"><div class="brand">${LOGO}<div><b>Araç Defterim</b><small>${esc(auth?.user||"")}</small></div></div>
     <div class="r"><button class="btn icon-btn" data-a="settings" aria-label="Ayarlar">${ic("sliders")}</button>
     ${v ? `<button class="btn primary sm" data-a="addVehicle">${ic("plus")} Araç</button>` : ""}</div></header>`;
+  if (!NATIVE && vs.length && !state.settings.icsTipHidden)
+    h += `<div class="banner s-warn"><span>Hatırlatma almak için tarihleri Takvim'e ekle.</span><span class="btns" style="flex:none"><button class="btn sm" data-a="ics">${ic("calendar")} Ekle</button><button class="btn sm ghost icon-btn" data-a="hideIcsTip" aria-label="Gizle">✕</button></span></div>`;
   if (NATIVE && state.settings.notify && notifPerm === "denied" && vs.length)
     h += `<div class="banner s-warn">Bildirim izni kapalı; hatırlatma gelmez.<button class="btn sm" data-a="askPerm">İzin ver</button></div>`;
   if (vs.length > 1)
@@ -725,6 +784,9 @@ function settingsSheet(){
     <label class="check"><input type="checkbox" id="f-remember-s" form="sf" ${remember ? "checked" : ""}> Beni hatırla</label>
     <p style="font-size:13px">Açıksa uygulama şifre sormadan açılır. Kapalıysa her açılışta ve 5 dakikadan uzun arka planda kaldıktan sonra şifre sorulur.</p>
     <div class="btns"><button class="btn" data-a="account">${ic("lock")} Kullanıcı adı ve şifre</button><button class="btn" data-a="lockNow">Çıkış yap</button></div></div>
+  <div class="card"><span class="lab">Takvime aktar</span><p>${NATIVE ? "Tarihleri telefonunun takvim uygulamasına da ekleyebilirsin." :
+    "iPhone'da web uygulaması bildirim gönderemez. Tarihleri Takvim'e aktar; hatırlatmaları Takvim gönderir. Tarih değiştirdiğinde yeniden aktar."}</p>
+    <div class="btns"><button class="btn" data-a="ics">${ic("calendar")} Takvime ekle</button></div></div>
   <div class="card"><span class="lab">Yedek</span><p>Yedek dosyası araçları, masrafları ve belge fotoğraflarını içerir. WhatsApp, e-posta veya Drive'a kaydedebilirsin.</p>
     <div class="btns"><button class="btn" data-a="export">${ic("share")} Yedek al</button><button class="btn" data-a="import">Yedekten yükle</button></div></div>
   <p class="note">Araç Defterim ${window.APP_VERSION || ""}</p>`);
@@ -765,6 +827,8 @@ document.addEventListener("click", async e => {
     case "account": accountSheet(); break;
     case "lockNow": await setRemember(false); lock(); toast("Çıkış yapıldı"); break;
     case "export": exportBackup(); break;
+    case "ics": exportCalendar(); break;
+    case "hideIcsTip": state.settings.icsTipHidden = true; save(); break;
     case "import": document.getElementById("importFile").click(); break;
     case "askPerm": await checkPerm(true); render(); scheduleAll();
       if (notifPerm === "denied") toast("Telefon Ayarları › Uygulamalar › Araç Defterim › Bildirimler'den açabilirsin.", false); break;
@@ -920,6 +984,11 @@ document.addEventListener("visibilitychange", () => {
 
 (async () => {
   try { const info = P.App && await withTimeout(P.App.getInfo(), 3000); if (info) window.APP_VERSION = info.version; } catch {}
+  if (!NATIVE){
+    try { navigator.storage?.persist?.(); } catch {}
+    if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+    window.APP_VERSION = window.APP_VERSION || "web";
+  }
   await load();
   session.mode = auth ? "login" : "create";
   if (auth && remember) session.locked = false;

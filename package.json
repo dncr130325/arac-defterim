@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "sync": "cap sync android"
+    "sync": "cap sync android",
+    "web": "rm -rf docs/app && cp -r www docs/app"
   },
   "dependencies": {
     "@capacitor/android": "7.6.9",
